@@ -6,4 +6,4 @@ interval_s = 60
 [[target]]
 name = "foo"
 host = "bar"
-interval_s = 30
+interval_s = 5

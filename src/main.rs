@@ -1,8 +1,12 @@
 extern crate hyper;
 extern crate rustc_serialize;
 extern crate toml;
+extern crate ws;
+
+mod ws_server_handler;
 
 use std::env;
+use std::sync::{Arc, Mutex};
 use std::fs::File;
 use std::io::Read;
 use std::result::Result;
@@ -10,7 +14,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use hyper::Client;
+use ws::{Sender, Factory, Handler};
 
 #[derive(RustcDecodable, Eq, PartialEq, Clone, Debug)]
 struct CanaryConfig {
@@ -24,7 +28,13 @@ struct CanaryTarget {
     interval_s: u64
 }
 
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub struct CanaryEvent {
+    payload: String
+}
+
 fn main() {
+    // Read config
     let config_path = match env::args().nth(1) {
         Some(c) => c,
         None => panic!("no configuration file supplied as the first argument")
@@ -35,33 +45,75 @@ fn main() {
         Err(err) => panic!("{} -- Invalid configuration file {}", err, config_path.clone())
     };
 
-    let (tx, rx) = mpsc::channel();
+    // Start polling
+    let (poll_tx, poll_rx) = mpsc::channel();
 
     for target in config.target {
-        let child_tx = tx.clone();
+        let child_poll_tx = poll_tx.clone();
 
         thread::spawn(move || {
             loop {
-                let _ = child_tx.send(check_host(target.clone()));
+                let _ = child_poll_tx.send(check_host(target.clone()));
                 thread::sleep(Duration::new(target.interval_s, 0));
             }
         });
     }
 
+
+
+
+    // Start websocket server to push info to frontend
+    // let client_txs: Arc<Mutex<Vec<std::sync::mpsc::Sender<CanaryEvent>>>> = Arc::new(Mutex::new(Vec::new()));
+    // let broadcast_txs = client_txs.clone();
+
+    thread::spawn(move || {
+        ws::listen("127.0.0.1:8099", |sender| {
+            let handler = ws_server_handler::Client::new(out);
+            // client_txs.lock().unwrap().push(handler.tx.clone());
+            handler
+        }).unwrap();
+    });
+
+    // let input = thread::spawn(move || {
+    //         let stdin = io::stdin();
+    //         for line in stdin.lock().lines() {
+    //             // Send a message to all connections regardless of
+    //             // how those connections were established
+    //             broacaster.send(line.unwrap()).unwrap();
+    //         }
+    //     });
+
+
+    let mut me = ws::WebSocket::new(|sender| {
+        move |msg| {
+            Ok("yes")
+        }
+    }).unwrap();
+    let broadcaster = me.broadcaster();
+
+    // Glue websocket server and polling together
     loop {
-        let result = rx.recv().unwrap();
+        let result = poll_rx.recv().unwrap();
         log_result(result);
+        broadcaster.send("lol");
+        // for client_tx in broadcast_txs.lock().unwrap().iter() {
+        //     client_tx.send(CanaryEvent { payload: "log event".to_owned() });
+        // }
     }
 }
 
 fn check_host(config: CanaryTarget) -> Result<(), String> {
-    println!("checking {:#?}", config);
-
-    let response = Client::new().get("http://bgp-ci.ida-gds-demo.com").send();
+    let response = hyper::Client::new().get("http://bgp-ci.ida-gds-demo.com").send();
 
     return match response {
-        Ok(_) => Ok(()),
-        Err(_err) => Err("no go".to_owned())
+        Ok(r) => {
+            if r.status == hyper::status::StatusCode::Ok {
+                Ok(())
+            } else {
+                Err(format!("bad status code: {}", r.status))
+            }
+        },
+        Err(err) => Err(format!("failed to poll server: {}", err))
     }
 }
 
@@ -108,7 +160,7 @@ mod tests {
                 CanaryTarget {
                     name: "foo".to_owned(),
                     host: "bar".to_owned(),
-                    interval_s: 30
+                    interval_s: 5
                 },
             )
         };
