@@ -102,11 +102,13 @@ mod tests {
             target: vec!(
                 CanaryTarget {
                     name: "Hello,".to_owned(),
-                    host: "world!".to_owned()
+                    host: "world!".to_owned(),
+                    interval_s: 60
                 },
                 CanaryTarget {
                     name: "foo".to_owned(),
-                    host: "bar".to_owned()
+                    host: "bar".to_owned(),
+                    interval_s: 30
                 },
             )
         };
